@@ -2,10 +2,11 @@ import argparse
 import gzip
 import os
 import sys
+from base64 import a85decode, a85encode
 from math import ceil
 
-import PIL.Image
 import pdf2image
+from PIL import Image
 from qrcode import QRCode
 from qrcode.constants import *
 from qrcode.util import BIT_LIMIT_TABLE
@@ -34,6 +35,9 @@ def file_to_slice(filename, content, error_correction, compress):
         content = content.encode('utf8')
     if len(filename) > 255:
         raise ValueError('Filename too long, should be at most 255 bytes')
+    if compress:
+        content = gzip.compress(content)
+    content = a85encode(content).decode('ascii')
     slice_max_len = SIZE_LIMIT_ERR_CORR[error_correction] - (FileSlice.HEADER_FIXED_LEN + len(filename))
     file_slices = list()
     i = 0
@@ -51,16 +55,21 @@ def file_to_slice(filename, content, error_correction, compress):
 def slice_to_file(slices):
     filename = slices[0].filename
     total = slices[0].total
+    compressed = slices[0].compressed
     contents = [None] * total
 
     for s in slices:
         content = s.content
-        if s.compressed:
-            content = gzip.decompress(content)
         assert s.filename == filename
         contents[s.index] = content
     assert None not in contents
-    return filename, b''.join(contents)
+    content = ''.join(contents)
+    content = a85decode(content)
+
+    if compressed:
+        content = gzip.decompress(content)
+    # decode and return
+    return filename, content
 
 
 def main():
@@ -95,13 +104,11 @@ def main():
         print('Convert file to paper, output to', output_filename)
         with open(filename, 'rb') as f:
             content = f.read()
-        if args.compress:
-            content = gzip.compress(content)
         slices = file_to_slice(filename, content, error_correction, args.compress)
         page_count = ceil(len(slices) / 6)
         page_images = list()
         for i in range(page_count):
-            page_image = PIL.Image.new('L', (1190, 1684), color='white')
+            page_image = Image.new('L', (1190, 1684), color='white')
             for j in range(min(6, len(slices) - 6 * i)):
                 qr = QRCode(error_correction=error_correction, border=1)
                 qr.add_data(slices[i * 6 + j].serialize())
@@ -128,12 +135,16 @@ def main():
                 else:
                     w = 1000
                     h = int(h * (w / 1000))
-                p = p.resize((h, w), PIL.Image.HAMMING)
+                p = p.resize((h, w), Image.HAMMING)
 
             scanner = Scanner()
             results = scanner.scan(p)
             for r in results:
+
                 _type, data, quality, position = r
+                if _type != 'QR-Code':
+                    continue
+                data = data.decode('ascii')
                 slice = FileSlice.deserialize(data)
                 restored_slices.append(slice)
         filename, content = slice_to_file(restored_slices)

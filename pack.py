@@ -1,4 +1,4 @@
-HEADER = b'PS'
+HEADER = 'PS'
 
 
 class DeserializationError(Exception):
@@ -8,55 +8,62 @@ class DeserializationError(Exception):
 class FileSlice:
     """
     packet format:
-    'PS'(header, 2bytes)+total(1byte, 1-255)+index(1byte, 0-254)+compressed(1byte,bool)
-    +filename_length(1 byte,1-255)+filename(up to 255 bytes)
-    +content_length(2 bytes,1-65535)+content(typically less than 3000 bytes)
+    'PS'(header, 2bytes)+total(3bytes, 001-999 text)+index(3bytes, 000-998 text)+compressed(1byte,0 or 1 text)
+    +filename_length(2 bytes,01-99 text)+filename(up to 99 bytes str)
+    +content_length(4 bytes,0000-9999 str)+content(typically less than 3000 bytes)
 
     """
-    HEADER_FIXED_LEN = 7
+    HEADER_FIXED_LEN = 15
 
-    def __init__(self, total, index, compressed, content: bytes or str, filename: str = None):
+    def __init__(self, total, index, compressed, content: str, filename: str = None):
         self.total = total
         self.index = index
         self.compressed = compressed
-        if type(content) == str:
-            content = content.encoode('utf8')
+        if (type(content) != str):
+            raise TypeError
         self.content = content
         self.filename = filename
 
     def serialize(self):
-        data = b''
-        data += HEADER
-        data += bytes([self.total, self.index])
-        data += bytes([int(self.compressed)])
-        data += bytes([len(self.filename)])
-        data += bytes(self.filename, encoding='utf8')
-        data += (len(self.content)).to_bytes(2, byteorder='big', signed=False)
-        data += self.content
+        data = HEADER + '{total:03d}{index:03d}{compressed:01d}{filename_len:02d}{filename}{content_len:04d}{content}'.format(
+            total=self.total,
+            index=self.index,
+            compressed=self.compressed,
+            filename_len=len(self.filename),
+            filename=self.filename,
+            content_len=len(self.content),
+            content=self.content
+        )
         return data
 
     @classmethod
-    def deserialize(cls, data: bytes):
+    def deserialize(cls, data: str):
+        if type(data) != str:
+            raise TypeError
         if not data.startswith(HEADER):
             raise DeserializationError('Invalid header')
-        data = data[2:]
-        total, index = data[:2]
-        data = data[2:]
-        compressed = bool(data[0])
-        data = data[1:]
-        filename_len = data[0]
-        filename = data[1:filename_len + 1].decode('utf8')
-        data = data[filename_len + 1:]
 
-        content_length = int.from_bytes(data[:2], byteorder='big', signed=False)
-        content = data[2:]
+        data = data[2:]
+        total = int(data[:3])
+        data = data[3:]
+        index = int(data[:3])
+        data = data[3:]
+        compressed = bool(int(data[0]))
+        data = data[1:]
+        filename_len = int(data[:2])
+        data = data[2:]
+        filename = data[:filename_len]
+        data = data[filename_len:]
+        content_length = int(data[:4])
+        content = data[4:]
         if len(content) != content_length:
-            raise DeserializationError('Incorrect content length, expected {}, got {}'.format(content_length,len(content)))
+            raise DeserializationError(
+                'Incorrect content length, expected {}, got {}'.format(content_length, len(content)))
         return FileSlice(total, index, compressed, content, filename)
 
 
 if __name__ == '__main__':
-    q = FileSlice(2, 1, False, b'12312312313', '123.txt')
+    q = FileSlice(2, 1, False, '12312312313', '123.txt')
     d = q.serialize()
     print(d)
     q = FileSlice.deserialize(d)
