@@ -4,7 +4,9 @@ import os
 import sys
 from base64 import a85decode, a85encode
 from math import ceil
+from tempfile import TemporaryFile
 
+import img2pdf
 import pdf2image
 from PIL import Image
 from qrcode import QRCode
@@ -38,6 +40,7 @@ def file_to_slice(filename, content, error_correction, compress):
     if compress:
         content = gzip.compress(content)
     content = a85encode(content).decode('ascii')
+    print('Total',len(content),'bytes of data to encode in QR code')
     slice_max_len = SIZE_LIMIT_ERR_CORR[error_correction] - (FileSlice.HEADER_FIXED_LEN + len(filename))
     file_slices = list()
     i = 0
@@ -104,26 +107,31 @@ def main():
         print('Convert file to paper, output to', output_filename)
         with open(filename, 'rb') as f:
             content = f.read()
-        slices = file_to_slice(filename, content, error_correction, args.compress)
+        slices = file_to_slice(os.path.basename(filename), content, error_correction, args.compress)
         page_count = ceil(len(slices) / 6)
+        print('Generating PDF,',page_count,'pages in total')
         page_images = list()
+        temp_files = list()
         for i in range(page_count):
-            page_image = Image.new('L', (1190, 1684), color='white')
+            page_image = Image.new('1', (1190, 1684), color='white')
             for j in range(min(6, len(slices) - 6 * i)):
-                qr = QRCode(error_correction=error_correction, border=1)
+                qr = QRCode(error_correction=error_correction, box_size=10, border=0)
                 qr.add_data(slices[i * 6 + j].serialize())
                 qr_image = qr.make_image()
                 qr_image = qr_image.resize((440, 440))
                 page_image.paste(qr_image, PAGE_IMAGE_COORD[j])
             page_images.append(page_image)
+            temp_file = TemporaryFile(suffix='.png')
+            page_image.save(temp_file, format='PNG')
+            temp_file.seek(0)
+            temp_files.append(temp_file)
 
-        if len(page_images) == 1:
-            page_images[0].save(output_filename)
-        else:
-            page_images[0].save(output_filename, save_all=True, append_images=page_images[1:])
+        with open(output_filename, 'wb') as f:
+            img2pdf.convert(temp_files, outputstream=f)
     elif args.restore:
         pages = pdf2image.convert_from_path(filename)
         restored_slices = list()
+
         for p in pages:
             p = p.convert('L')
             # scale

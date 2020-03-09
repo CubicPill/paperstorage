@@ -19,7 +19,7 @@ class FileSlice:
         self.total = total
         self.index = index
         self.compressed = compressed
-        if (type(content) != str):
+        if type(content) != str:
             raise TypeError
         self.content = content
         self.filename = filename
